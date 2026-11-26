@@ -1,9 +1,10 @@
-using Microsoft.VisualBasic.Devices;
-using SuperVisionObjectDesktop._3dParts;
-using SuperVisionObjectDesktop.Devices;
-using SuperVisionObjectDesktop.Network;
+Ôªøusing SuperVisionObjectDesktop.Devices;
+using SuperVisionObjectDesktop.UI;
 using SuperVisionObjectDesktop.ViewModels;
 using SuperVisionObjectDesktop.ViewModels.GraphicsTabs;
+using System;
+using System.Drawing;
+using System.Threading.Tasks;
 using System.Windows.Forms;
 
 namespace SuperVisionObjectDesktop
@@ -12,92 +13,313 @@ namespace SuperVisionObjectDesktop
     {
         DevicesListViewModel _devicesListViewModel;
         DevicesManager _devicesManager;
+        GraphicsTabViewModel _graphicsTabViewModel;
+
+        private Label _headerStatusLabel;
+        private AppleButton _scanButton;
+        private AppleButton _runButton;
+
         public Form1()
         {
             InitializeComponent();
+            AppleNativeWindow.EnableLightTitleBar(this);
+            ApplyAppleThemeAndLayout();
 
-
-            // œÂ‚‡ˇ ‚ÍÎ‡‰Í‡
             tabControl1.TabPages.Clear();
-            tabControl1.TabPages.Add(new TabPage());
-            tabControl1.TabPages[0].Controls.Add(new MAX30105Tabs(null) { Dock = DockStyle.Fill });
-            //tabPage1.Controls.Add(_plotLogs1);
-
-            // ¬ÚÓ‡ˇ ‚ÍÎ‡‰Í‡
-            //_plotLogs2 = new PlotWithLogsControl { Dock = DockStyle.Fill };
-            //tabPage2.Controls.Add(_plotLogs2);
-
-
-
+            var startTab = new TabPage("–ú–æ–Ω–∏—Ç–æ—Ä –§–ü–ì")
+            {
+                BackColor = AppleColors.CardBg,
+                ForeColor = AppleColors.LabelPrimary
+            };
+            startTab.Controls.Add(new MAX30105Tabs(null) { Dock = DockStyle.Fill });
+            tabControl1.TabPages.Add(startTab);
 
             _devicesListViewModel = new DevicesListViewModel(DevicesFlowLayout);
 
-
             LoadPicture.Visible = false;
             this.Load += Form1_Load;
-            this.Resize += Form1_Resize; // ƒÓ·‡‚ÎˇÂÏ Ó·‡·ÓÚ˜ËÍ ËÁÏÂÌÂÌËˇ ‡ÁÏÂ‡ ÙÓÏ˚
-
+            this.Resize += Form1_Resize;
+            this.FormClosing += Form1_FormClosing;
 
             InitTasks();
         }
 
-        private void Form1_Load(object sender, EventArgs e)
+        private void ApplyAppleThemeAndLayout()
         {
-            // Õ‡ÒÚÓÈÍ‡ FlowLayoutPanel
-            //DevicesFlowLayout.FlowDirection = FlowDirection.TopDown;
-            //DevicesFlowLayout.WrapContents = false;
-            //DevicesFlowLayout.AutoScroll = true;
-            //DevicesFlowLayout.Padding = new Padding(10);
-            //DevicesFlowLayout.BackColor = Color.FromArgb(240, 240, 240);
+            this.Text = "SuperVision Health ‚Äî –§–ü–ì –ú–æ–Ω–∏—Ç–æ—Ä";
+            this.BackColor = AppleColors.WindowBg;
+            this.ForeColor = AppleColors.LabelPrimary;
+            this.Font = AppleColors.TextFont(9.5F, FontStyle.Regular);
+            this.MinimumSize = new Size(1080, 680);
+            this.StartPosition = FormStartPosition.CenterScreen;
 
-            //// ◊ÚÓ·˚ Ô‡ÌÂÎ¸ ‡ÒÚˇ„Ë‚‡Î‡Ò¸ ÔË ËÁÏÂÌÂÌËË ‡ÁÏÂ‡ ÙÓÏ˚
-            //DevicesFlowLayout.Dock = DockStyle.Fill;
+            this.Controls.Clear();
 
-            // »ÌËˆË‡ÎËÁ‡ˆËˇ ‰‡ÌÌ˚ı
-            //InitializeData();
+            // 1. Apple Light Header Bar
+            var headerPanel = new Panel
+            {
+                Dock = DockStyle.Top,
+                Height = 68,
+                BackColor = AppleColors.HeaderBg,
+                Padding = new Padding(22, 12, 22, 12)
+            };
+            headerPanel.Paint += (s, e) =>
+            {
+                using var pen = new Pen(AppleColors.Hairline, 1);
+                e.Graphics.DrawLine(pen, 0, headerPanel.Height - 1, headerPanel.Width, headerPanel.Height - 1);
+            };
 
-            // «‡ÔÓÎÌÂÌËÂ Ô‡ÌÂÎË
-            //FillFlowLayoutPanel();
+            var titleStack = new Panel
+            {
+                Dock = DockStyle.Left,
+                Width = 440,
+                BackColor = AppleColors.HeaderBg
+            };
+
+            var lblHeart = new Label
+            {
+                Text = "‚ô•",
+                Font = AppleColors.DisplayFont(17F, FontStyle.Bold),
+                ForeColor = AppleColors.SystemPink,
+                AutoSize = true,
+                Location = new Point(0, 1),
+                BackColor = AppleColors.HeaderBg
+            };
+            var lblTitle = new Label
+            {
+                Text = "SuperVision Health",
+                Font = AppleColors.DisplayFont(14.5F, FontStyle.Bold),
+                ForeColor = AppleColors.LabelPrimary,
+                AutoSize = true,
+                Location = new Point(28, 1),
+                BackColor = AppleColors.HeaderBg
+            };
+            var lblSub = new Label
+            {
+                Text = "–ú–æ–Ω–∏—Ç–æ—Ä–∏–Ω–≥ —Ñ–æ—Ç–æ–ø–ª–µ—Ç–∏–∑–º–æ–≥—Ä–∞–º–º—ã –∏ –ø—É–ª—å—Å–∞",
+                Font = AppleColors.SmallFont(8.5F, FontStyle.Regular),
+                ForeColor = AppleColors.LabelSecondary,
+                AutoSize = true,
+                Location = new Point(30, 27),
+                BackColor = AppleColors.HeaderBg
+            };
+            titleStack.Controls.Add(lblHeart);
+            titleStack.Controls.Add(lblTitle);
+            titleStack.Controls.Add(lblSub);
+
+            var actionsPanel = new FlowLayoutPanel
+            {
+                Dock = DockStyle.Right,
+                FlowDirection = FlowDirection.RightToLeft,
+                WrapContents = false,
+                AutoSize = true,
+                BackColor = AppleColors.HeaderBg,
+                Padding = new Padding(0, 4, 0, 0)
+            };
+
+            _runButton = new AppleButton
+            {
+                Text = "–ó–∞–ø—É—Å—Ç–∏—Ç—å –ø–æ—Ç–æ–∫",
+                Size = new Size(156, 36),
+                IsPill = true,
+                FillColor = AppleColors.SystemGreen,
+                HoverColor = AppleColors.SystemGreenHover,
+                PressedColor = AppleColors.SystemGreenPressed,
+                Margin = new Padding(10, 0, 0, 0)
+            };
+            _runButton.Click += button2_Click;
+
+            _scanButton = new AppleButton
+            {
+                Text = "–ù–∞–π—Ç–∏ —É—Å—Ç—Ä–æ–π—Å—Ç–≤–∞",
+                Size = new Size(162, 36),
+                IsPill = true,
+                FillColor = AppleColors.SystemBlue,
+                HoverColor = AppleColors.SystemBlueHover,
+                PressedColor = AppleColors.SystemBluePressed,
+                Margin = new Padding(10, 0, 0, 0)
+            };
+            _scanButton.Click += button1_Click;
+
+            LoadPicture.Size = new Size(28, 28);
+            LoadPicture.Margin = new Padding(8, 4, 4, 0);
+            LoadPicture.BackColor = AppleColors.HeaderBg;
+
+            _headerStatusLabel = new Label
+            {
+                Text = "",
+                ForeColor = AppleColors.LabelSecondary,
+                Font = AppleColors.TextFont(9F, FontStyle.Regular),
+                AutoSize = true,
+                BackColor = AppleColors.HeaderBg,
+                Margin = new Padding(8, 9, 10, 0)
+            };
+
+            actionsPanel.Controls.Add(_runButton);
+            actionsPanel.Controls.Add(_scanButton);
+            actionsPanel.Controls.Add(LoadPicture);
+            actionsPanel.Controls.Add(_headerStatusLabel);
+
+            headerPanel.Controls.Add(actionsPanel);
+            headerPanel.Controls.Add(titleStack);
+
+            // 2. Main Grouped Canvas
+            var bodyPanel = new Panel
+            {
+                Dock = DockStyle.Fill,
+                Padding = new Padding(18),
+                BackColor = AppleColors.WindowBg
+            };
+
+            // –ü—Ä–∞–≤–∞—è –±–µ–ª–∞—è –∫–∞—Ä—Ç–æ—á–∫–∞ —Å–æ —Å–ø–∏—Å–∫–æ–º —É—Å—Ç—Ä–æ–π—Å—Ç–≤
+            var sidebarCard = new AppleCardPanel
+            {
+                Dock = DockStyle.Right,
+                Width = 340,
+                OuterColor = AppleColors.WindowBg,
+                CardColor = AppleColors.CardBg,
+                Padding = new Padding(14, 14, 14, 14)
+            };
+
+            var sidebarHeader = new Label
+            {
+                Text = "–£—Å—Ç—Ä–æ–π—Å—Ç–≤–∞",
+                Dock = DockStyle.Top,
+                Height = 28,
+                Font = AppleColors.DisplayFont(12.5F, FontStyle.Bold),
+                ForeColor = AppleColors.LabelPrimary,
+                BackColor = AppleColors.CardBg,
+                TextAlign = ContentAlignment.MiddleLeft
+            };
+            var sidebarSub = new Label
+            {
+                Text = "–û—Ç–º–µ—Ç—å—Ç–µ –¥–∞—Ç—á–∏–∫ –¥–ª—è –ø–æ–¥–∫–ª—é—á–µ–Ω–∏—è",
+                Dock = DockStyle.Top,
+                Height = 20,
+                Font = AppleColors.SmallFont(8.5F, FontStyle.Regular),
+                ForeColor = AppleColors.LabelSecondary,
+                BackColor = AppleColors.CardBg
+            };
+
+            DevicesFlowLayout.Dock = DockStyle.Fill;
+            DevicesFlowLayout.BackColor = AppleColors.CardBg;
+            DevicesFlowLayout.FlowDirection = FlowDirection.TopDown;
+            DevicesFlowLayout.WrapContents = false;
+            DevicesFlowLayout.AutoScroll = true;
+            DevicesFlowLayout.Padding = new Padding(0, 10, 2, 4);
+
+            sidebarCard.Controls.Add(DevicesFlowLayout);
+            sidebarCard.Controls.Add(sidebarSub);
+            sidebarCard.Controls.Add(sidebarHeader);
+
+            var spacer = new Panel
+            {
+                Dock = DockStyle.Right,
+                Width = 16,
+                BackColor = AppleColors.WindowBg
+            };
+
+            // –õ–µ–≤–∞—è –±–µ–ª–∞—è –∫–∞—Ä—Ç–æ—á–∫–∞ —Å –§–ü–ì
+            var chartCard = new AppleCardPanel
+            {
+                Dock = DockStyle.Fill,
+                OuterColor = AppleColors.WindowBg,
+                CardColor = AppleColors.CardBg,
+                Padding = new Padding(16, 14, 16, 16)
+            };
+
+            tabControl1.Dock = DockStyle.Fill;
+            tabControl1.Appearance = TabAppearance.FlatButtons;
+            tabControl1.SizeMode = TabSizeMode.Fixed;
+            tabControl1.ItemSize = new Size(0, 1);
+
+            var tabStrip = new AppleTabStrip(tabControl1)
+            {
+                Dock = DockStyle.Top
+            };
+            var stripSpacer = new Panel
+            {
+                Dock = DockStyle.Top,
+                Height = 12,
+                BackColor = AppleColors.CardBg
+            };
+
+            chartCard.Controls.Add(tabControl1);
+            chartCard.Controls.Add(stripSpacer);
+            chartCard.Controls.Add(tabStrip);
+
+            bodyPanel.Controls.Add(chartCard);
+            bodyPanel.Controls.Add(spacer);
+            bodyPanel.Controls.Add(sidebarCard);
+
+            this.Controls.Add(bodyPanel);
+            this.Controls.Add(headerPanel);
         }
 
-        // Œ·‡·ÓÚ˜ËÍ ËÁÏÂÌÂÌËˇ ‡ÁÏÂ‡ ÙÓÏ˚
-        private void Form1_Resize(object sender, EventArgs e)
+        private void Form1_FormClosing(object? sender, FormClosingEventArgs e)
         {
-            // œËÌÛ‰ËÚÂÎ¸ÌÓ Ó·ÌÓ‚ÎˇÂÏ ‡ÁÏÂ˚ ‚ÒÂı ˝ÎÂÏÂÌÚÓ‚
+            _devicesManager?.Dispose();
+        }
+
+        private void Form1_Load(object? sender, EventArgs e)
+        {
+        }
+
+        private void Form1_Resize(object? sender, EventArgs e)
+        {
             foreach (Control control in DevicesFlowLayout.Controls)
             {
                 if (control is DeviceItemControl item)
                 {
-                    // ¬˚Á˚‚‡ÂÏ Ó·ÌÓ‚ÎÂÌËÂ ‡ÁÏÂ‡
-                    item.Width = DevicesFlowLayout.ClientSize.Width - DevicesFlowLayout.Padding.Horizontal - 20;
+                    item.Width = DevicesFlowLayout.ClientSize.Width - DevicesFlowLayout.Padding.Horizontal - 12;
                 }
             }
         }
 
         private async void InitTasks()
         {
-            await _devicesListViewModel.InitComponents();
+            await RefreshDevicesAsync();
         }
 
-        private async void button1_Click(object sender, EventArgs e)
+        private async void button1_Click(object? sender, EventArgs e)
+        {
+            await RefreshDevicesAsync();
+        }
+
+        private async Task RefreshDevicesAsync()
         {
             LoadPicture.Visible = true;
-            await _devicesListViewModel.InitComponents();
-            LoadPicture.Visible = false;
+            _scanButton.Enabled = false;
+            _headerStatusLabel.Text = "–ü–æ–∏—Å–∫ –¥–∞—Ç—á–∏–∫–æ–≤...";
+            try
+            {
+                await _devicesListViewModel.InitComponents();
+                int count = DevicesFlowLayout.Controls.Count;
+                _headerStatusLabel.Text = count > 0
+                    ? $"–ù–∞–π–¥–µ–Ω–æ: {count}"
+                    : "–£—Å—Ç—Ä–æ–π—Å—Ç–≤–∞ –Ω–µ –Ω–∞–π–¥–µ–Ω—ã";
+            }
+            finally
+            {
+                LoadPicture.Visible = false;
+                _scanButton.Enabled = true;
+            }
         }
 
-
-        GraphicsTabViewModel _graphicsTabViewModel;
-
-        private void button2_Click(object sender, EventArgs e)
+        private void button2_Click(object? sender, EventArgs e)
         {
             var devices = _devicesListViewModel.GetUsingDevices();
-            _graphicsTabViewModel = new GraphicsTabViewModel(tabControl1, devices);
+            if (devices.Count == 0)
+            {
+                MessageBox.Show("–í—ã–±–µ—Ä–∏—Ç–µ —Ö–æ—Ç—è –±—ã –æ–¥–Ω–æ —É—Å—Ç—Ä–æ–π—Å—Ç–≤–æ –≤ —Å–ø–∏—Å–∫–µ —Å–ø—Ä–∞–≤–∞.", "–£—Å—Ç—Ä–æ–π—Å—Ç–≤–æ –Ω–µ –≤—ã–±—Ä–∞–Ω–æ", MessageBoxButtons.OK, MessageBoxIcon.Information);
+                return;
+            }
 
+            _devicesManager?.Dispose();
+            _graphicsTabViewModel = new GraphicsTabViewModel(tabControl1, devices);
 
             _devicesManager = new DevicesManager(devices);
             _devicesManager.RunProcess();
-
         }
     }
 }

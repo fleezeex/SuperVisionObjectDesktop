@@ -1,98 +1,218 @@
 ﻿using SuperVisionObjectDesktop.Devices;
+using SuperVisionObjectDesktop.UI;
 using System;
-using System.Collections.Generic;
-using System.Linq;
-using System.Text;
-using System.Threading.Tasks;
+using System.Drawing;
+using System.Drawing.Drawing2D;
+using System.Windows.Forms;
 
 namespace SuperVisionObjectDesktop.ViewModels
 {
     public class DeviceItemControl : Panel
     {
-        // Ссылка на объект данных
         private IDevice _device;
         public IDevice Device => _device;
 
-        // Контролы
-        private Label[] labels = new Label[6];
-        private CheckBox checkBox;
-        private Button viewButton;
+        private Label _titleLabel;
+        private Label _ipLabel;
+        private Label _sensorLabel;
+        private Label _rssiLabel;
+        private AppleButton _detailsButton;
 
-        // Событие для уведомления о клике по элементу
-        public event EventHandler<IDevice> ItemClicked;
+        private bool _isHovered;
+        private bool _isPressed;
+        private bool _isResizing;
 
-        private bool _isResizing = false;
+        public event EventHandler<IDevice>? ItemClicked;
 
         public DeviceItemControl(IDevice device)
         {
             _device = device;
 
-            this.Margin = new Padding(5);
-            this.BackColor = Color.White;
-            this.BorderStyle = BorderStyle.FixedSingle;
-            this.Padding = new Padding(10);
+            this.Margin = new Padding(0, 0, 0, 10);
+            this.BackColor = AppleColors.CardSubtle;
+            this.BorderStyle = BorderStyle.None;
+            this.Padding = new Padding(14);
             this.Cursor = Cursors.Hand;
+            this.Height = 122;
+            this.MinimumSize = new Size(220, 122);
+            this.DoubleBuffered = true;
 
             InitializeControls();
-
-            this.MinimumSize = new Size(200, 140);
-
-            
-            
             UpdateData(device);
 
             this.ParentChanged += PersonItemControl_ParentChanged;
         }
 
-        private void InitializeControls()
+        private Color CurrentCardColor()
         {
-            // Чекбокс справа
-            checkBox = new CheckBox();
-            checkBox.Size = new Size(20, 20);
-            checkBox.Anchor = AnchorStyles.Top | AnchorStyles.Right;
-            checkBox.Checked = _device.IsUsing;
-            checkBox.CheckedChanged += CheckBox_CheckedChanged;
-
-            // Кнопка "Подробнее"
-            viewButton = new Button();
-            viewButton.Text = "Просмотр";
-            viewButton.Size = new Size(80, 25);
-            viewButton.Anchor = AnchorStyles.Top | AnchorStyles.Right;
-            viewButton.Click += ViewButton_Click;
-
-            string[] labelNames = { "Устройство:", "Тип:", "Сенсор:", "IP:", "Каналы-Частота:", "Уровень сигнала:" };
-            for (int i = 0; i < labels.Length; i++)
-            {
-                labels[i] = new Label();
-                labels[i].Text = $"{labelNames[i]} ";
-                labels[i].Location = new Point(10, 10 + i * 22);
-                labels[i].AutoSize = true;
-                labels[i].Font = new Font("Arial", 9);
-                labels[i].Tag = i; // Запоминаем индекс
-            }
-
-            // Добавляем все контролы
-            this.Controls.AddRange(labels);
-            this.Controls.Add(checkBox);
-            this.Controls.Add(viewButton);
-
-            // Добавляем обработчик клика на всю панель
-            this.Click += PersonItemControl_Click;
+            if (_device.IsUsing)
+                return AppleColors.CardSelected;
+            if (_isPressed)
+                return Color.FromArgb(232, 232, 238);
+            if (_isHovered)
+                return Color.FromArgb(241, 241, 246);
+            return AppleColors.CardSubtle;
         }
 
+        private void SyncChildColors()
+        {
+            Color bg = CurrentCardColor();
+            this.BackColor = bg;
+            if (_titleLabel != null) _titleLabel.BackColor = bg;
+            if (_ipLabel != null) _ipLabel.BackColor = bg;
+            if (_sensorLabel != null) _sensorLabel.BackColor = bg;
+            if (_rssiLabel != null) _rssiLabel.BackColor = bg;
+            if (_detailsButton != null) _detailsButton.BackColor = bg;
+        }
 
-        private void PersonItemControl_ParentChanged(object sender, EventArgs e)
+        protected override void OnPaint(PaintEventArgs e)
+        {
+            e.Graphics.Clear(AppleColors.CardBg);
+            e.Graphics.SmoothingMode = SmoothingMode.AntiAlias;
+            var rect = new RectangleF(1f, 1f, Width - 2.5f, Height - 2.5f);
+            if (rect.Width <= 4 || rect.Height <= 4) return;
+
+            Color bg = CurrentCardColor();
+            Color border = _device.IsUsing ? AppleColors.SystemBlue : AppleColors.Hairline;
+            float borderW = _device.IsUsing ? 1.6f : 1f;
+
+            using (var path = AppleGraphics.CreateRoundedPath(rect, 14f))
+            using (var brush = new SolidBrush(bg))
+            using (var pen = new Pen(border, borderW))
+            {
+                e.Graphics.FillPath(brush, path);
+                e.Graphics.DrawPath(pen, path);
+            }
+
+            // iOS selection circle
+            float circleSize = 22f;
+            float cx = Width - circleSize - 14f;
+            float cy = 12f;
+            var circleRect = new RectangleF(cx, cy, circleSize, circleSize);
+
+            if (_device.IsUsing)
+            {
+                using var fill = new SolidBrush(AppleColors.SystemBlue);
+                e.Graphics.FillEllipse(fill, circleRect);
+                using var checkPen = new Pen(Color.White, 2.2f)
+                {
+                    StartCap = LineCap.Round,
+                    EndCap = LineCap.Round,
+                    LineJoin = LineJoin.Round
+                };
+                e.Graphics.DrawLines(checkPen, new[]
+                {
+                    new PointF(cx + 6f, cy + 11.5f),
+                    new PointF(cx + 10f, cy + 15.5f),
+                    new PointF(cx + 16.5f, cy + 7.5f)
+                });
+            }
+            else
+            {
+                using var ringPen = new Pen(Color.FromArgb(199, 199, 204), 1.5f);
+                e.Graphics.DrawEllipse(ringPen, circleRect);
+            }
+
+            // 4-bar RSSI indicator
+            int activeBars = _device.RSSI >= -55 ? 4 : (_device.RSSI >= -67 ? 3 : (_device.RSSI >= -78 ? 2 : 1));
+            Color barActiveColor = _device.RSSI >= -65
+                ? AppleColors.SystemGreen
+                : (_device.RSSI >= -78 ? AppleColors.SystemOrange : AppleColors.SystemRed);
+
+            float barStartX = 14f;
+            float barBaseY = Height - 15f;
+            for (int i = 0; i < 4; i++)
+            {
+                float h = 4f + i * 3f;
+                var barRect = new RectangleF(barStartX + i * 5f, barBaseY - h, 3f, h);
+                using var barPath = AppleGraphics.CreateRoundedPath(barRect, 1.2f);
+                using var barBrush = new SolidBrush(i < activeBars ? barActiveColor : Color.FromArgb(209, 209, 214));
+                e.Graphics.FillPath(barBrush, barPath);
+            }
+        }
+
+        private void InitializeControls()
+        {
+            _titleLabel = new Label
+            {
+                Location = new Point(14, 12),
+                AutoSize = true,
+                Font = AppleColors.DisplayFont(10.5F, FontStyle.Bold),
+                ForeColor = AppleColors.LabelPrimary
+            };
+
+            _ipLabel = new Label
+            {
+                Location = new Point(14, 38),
+                AutoSize = true,
+                Font = AppleColors.MonoFont(8.8F, FontStyle.Regular),
+                ForeColor = AppleColors.SystemBlue
+            };
+
+            _sensorLabel = new Label
+            {
+                Location = new Point(14, 60),
+                AutoSize = true,
+                Font = AppleColors.TextFont(8.5F, FontStyle.Regular),
+                ForeColor = AppleColors.LabelSecondary
+            };
+
+            _rssiLabel = new Label
+            {
+                Location = new Point(38, 89),
+                AutoSize = true,
+                Font = AppleColors.SmallFont(8.5F, FontStyle.Bold),
+                ForeColor = AppleColors.LabelSecondary
+            };
+
+            _detailsButton = new AppleButton
+            {
+                Text = "Подробнее",
+                Size = new Size(88, 26),
+                CornerRadius = 8,
+                FillColor = AppleColors.SecondaryBtnBg,
+                HoverColor = AppleColors.SecondaryBtnHover,
+                PressedColor = AppleColors.SecondaryBtnPressed,
+                Font = AppleColors.SmallFont(8.3F, FontStyle.Bold),
+                ForeColor = AppleColors.LabelPrimary
+            };
+            _detailsButton.Click += ViewButton_Click;
+
+            this.Controls.Add(_titleLabel);
+            this.Controls.Add(_ipLabel);
+            this.Controls.Add(_sensorLabel);
+            this.Controls.Add(_rssiLabel);
+            this.Controls.Add(_detailsButton);
+
+            SyncChildColors();
+
+            AttachInteraction(this);
+            foreach (Control c in this.Controls)
+            {
+                if (c != _detailsButton)
+                    AttachInteraction(c);
+            }
+        }
+
+        private void AttachInteraction(Control ctrl)
+        {
+            ctrl.MouseEnter += (s, e) => { _isHovered = true; SyncChildColors(); Invalidate(); };
+            ctrl.MouseLeave += (s, e) => { _isHovered = false; _isPressed = false; SyncChildColors(); Invalidate(); };
+            ctrl.MouseDown += (s, e) => { if (e.Button == MouseButtons.Left) { _isPressed = true; SyncChildColors(); Invalidate(); } };
+            ctrl.MouseUp += (s, e) => { if (_isPressed) { _isPressed = false; SyncChildColors(); Invalidate(); } };
+            ctrl.Click += PersonItemControl_Click;
+        }
+
+        private void PersonItemControl_ParentChanged(object? sender, EventArgs e)
         {
             if (this.Parent != null)
             {
-                // Подписываемся на изменение размера родителя
                 this.Parent.Resize += Parent_Resize;
-                // Обновляем размер при первом добавлении
                 UpdateSize();
             }
         }
 
-        private void Parent_Resize(object sender, EventArgs e)
+        private void Parent_Resize(object? sender, EventArgs e)
         {
             UpdateSize();
         }
@@ -102,21 +222,14 @@ namespace SuperVisionObjectDesktop.ViewModels
             if (_isResizing || this.Parent == null) return;
 
             _isResizing = true;
-
             try
             {
-                // Получаем ширину родителя с учетом отступов
                 int parentWidth = this.Parent.ClientSize.Width;
                 int padding = this.Parent.Padding.Horizontal;
                 int margin = this.Margin.Horizontal;
-
-                // Вычисляем доступную ширину
                 int availableWidth = parentWidth - padding - margin;
 
-                // Устанавливаем ширину (минус небольшие отступы)
-                this.Width = Math.Max(this.MinimumSize.Width, availableWidth - 5);
-
-                // Обновляем расположение контролов
+                this.Width = Math.Max(this.MinimumSize.Width, availableWidth - 6);
                 UpdateControlsLayout();
             }
             finally
@@ -127,123 +240,58 @@ namespace SuperVisionObjectDesktop.ViewModels
 
         private void UpdateControlsLayout()
         {
-            // Размещаем чекбокс и кнопку справа
-            int rightMargin = 10;
-            int checkBoxWidth = 20;
-            int buttonWidth = 80;
-            int spacing = 5;
-
-            // Чекбокс справа вверху
-            checkBox.Location = new Point(
-                this.Width - checkBoxWidth - rightMargin,
-                10
-            );
-
-            // Кнопка под чекбоксом
-            viewButton.Location = new Point(
-                this.Width - buttonWidth - rightMargin,
-                40
-            );
-
-            // Для лейблов делаем отступ, чтобы они не наезжали на кнопку
-            int maxLabelWidth = this.Width - buttonWidth - rightMargin - 20;
-
-            foreach (var label in labels)
-            {
-                if (label != null)
-                {
-                    // Если текст слишком длинный, обрезаем или переносим
-                    if (label.Width > maxLabelWidth)
-                    {
-                        label.AutoSize = false;
-                        label.Width = maxLabelWidth;
-                        label.Text = TruncateText(label.Text, maxLabelWidth);
-                    }
-                    else
-                    {
-                        label.AutoSize = true;
-                    }
-                }
-            }
+            if (_detailsButton == null) return;
+            _detailsButton.Location = new Point(this.Width - _detailsButton.Width - 14, this.Height - _detailsButton.Height - 12);
         }
-
-        private string TruncateText(string text, int maxWidth)
-        {
-            // Простая обрезка для длинных текстов
-            if (text.Length > 30)
-            {
-                return text.Substring(0, 30) + "...";
-            }
-            return text;
-        }
-
-
-
 
         public void UpdateData(IDevice device)
         {
             _device = device;
 
-            // Обновляем тексты лейблов
-            labels[0].Text = $"Устройство: {_device.Name}";
-            labels[1].Text = $"Тип: {_device.DeviceType}";
-            labels[2].Text = $"Сенсор: {_device.SensorType}";
-            labels[3].Text = $"IP: {_device.IPAddress.ToString()}";
-            labels[4].Text = $"Каналы-Частота: {_device.ChannelsCount} - {_device.SampleFrequancy}";
-            labels[5].Text = $"Уровень сигнала: {_device.RSSI}";
+            _titleLabel.Text = _device.Name;
+            _ipLabel.Text = $"{_device.IPAddress}";
+            _sensorLabel.Text = $"{_device.SensorType}  ·  {_device.SampleFrequancy} Гц";
+            _rssiLabel.Text = $"{_device.RSSI} dBm";
 
-            // Обновляем чекбокс
-            if (checkBox != null)
-                checkBox.Checked = _device.IsUsing;
-
-            // Меняем цвет фона в зависимости от выбора
-            this.BackColor = _device.IsUsing ? Color.LightGreen : Color.White;
+            SyncChildColors();
+            Invalidate();
             UpdateControlsLayout();
         }
 
-        private void PersonItemControl_Click(object sender, EventArgs e)
+        private void PersonItemControl_Click(object? sender, EventArgs e)
         {
             OnItemClicked();
         }
 
         private void OnItemClicked()
         {
-            // Инвертируем состояние выбора при клике
             _device.IsUsing = !_device.IsUsing;
-            checkBox.Checked = _device.IsUsing;
-            this.BackColor = _device.IsUsing ? Color.LightGreen : Color.White;
-            // Вызываем событие
+            SyncChildColors();
+            Invalidate();
             ItemClicked?.Invoke(this, _device);
         }
 
-        private void CheckBox_CheckedChanged(object sender, EventArgs e)
+        private void ViewButton_Click(object? sender, EventArgs e)
         {
-            _device.IsUsing = checkBox.Checked;
-            this.BackColor = _device.IsUsing ? Color.LightGreen : Color.White;
-        }
-
-        private void ViewButton_Click(object sender, EventArgs e)
-        {
-            // Показываем детальную информацию
             string details = $"Устройство: {_device.Name}\n" +
+                            $"MAC: {_device.Mac}\n" +
                             $"Тип: {_device.DeviceType}\n" +
                             $"Сенсор: {_device.SensorType}\n" +
                             $"IP: {_device.IPAddress}\n" +
-                            $"Каналы-Частота: {_device.ChannelsCount} - {_device.SampleFrequancy}\n" +
-                            $"Уровень сигнала: {_device.RSSI}\n";
+                            $"Каналы / Частота: {_device.ChannelsCount} / {_device.SampleFrequancy} Гц\n" +
+                            $"Прошивка: {_device.FirmwareVersion}\n" +
+                            $"Сигнал Wi-Fi: {_device.RSSI} dBm";
 
             MessageBox.Show(details, "Информация об устройстве", MessageBoxButtons.OK, MessageBoxIcon.Information);
         }
 
-        // Метод для доступа к чекбоксу
-        public bool IsSelected => checkBox.Checked;
+        public bool IsSelected => _device.IsUsing;
 
-        // Метод для установки состояния выбора
         public void SetSelected(bool selected)
         {
-            checkBox.Checked = selected;
             _device.IsUsing = selected;
-            this.BackColor = selected ? Color.LightGreen : Color.White;
+            SyncChildColors();
+            Invalidate();
         }
 
         protected override void OnResize(EventArgs e)

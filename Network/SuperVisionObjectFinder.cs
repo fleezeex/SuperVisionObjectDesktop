@@ -110,10 +110,20 @@ namespace SuperVisionObjectDesktop.Network
             if (subnetMask == null)
                 subnetMask = IPAddress.Parse("255.255.255.0");
             var baseAddress = GetNetworkAddress(localIP, subnetMask);
-            var hostCount = GetHostCount(subnetMask);
+            var hostCount = Math.Min(GetHostCount(subnetMask), 256);
+
+            using var httpHandler = new HttpClientHandler
+            {
+                Proxy = null,
+                UseProxy = false
+            };
+            using var httpClient = new HttpClient(httpHandler)
+            {
+                Timeout = TimeSpan.FromMilliseconds(1500)
+            };
 
             var tasks = new List<Task<IDevice?>>();
-            var semaphore = new SemaphoreSlim(20); // 20 параллельных запросов
+            using var semaphore = new SemaphoreSlim(50);
 
             for (int i = 1; i < hostCount - 1; i++)
             {
@@ -125,7 +135,7 @@ namespace SuperVisionObjectDesktop.Network
                     await semaphore.WaitAsync();
                     try
                     {
-                        return await ProbeDevice(ip);
+                        return await ProbeDevice(httpClient, ip);
                     }
                     finally
                     {
@@ -144,197 +154,75 @@ namespace SuperVisionObjectDesktop.Network
             return devices;
         }
 
-        static async Task<IDevice?> ProbeDevice(IPAddress ip)
+        static async Task<IDevice?> ProbeDevice(HttpClient httpClient, IPAddress ip)
         {
-            var stopwatch = Stopwatch.StartNew();
-            TcpClient? client = null;
-
             try
             {
-                client = new TcpClient();
-
-                // для пустых IP - таймаут 150 мс
-                var connectTask = client.ConnectAsync(ip.ToString(), 80);
-                if (await Task.WhenAny(connectTask, Task.Delay(150)) != connectTask)
+                using var response = await httpClient.GetAsync($"http://{ip}{CONFIG_PATH}");
+                if (!response.IsSuccessStatusCode)
                 {
                     return null;
                 }
-                await connectTask;
-                // Время на подключение
-                await Task.Delay(40);
 
-                using (var stream = client.GetStream())
+                string json = await response.Content.ReadAsStringAsync();
+                int start = json.IndexOf('{');
+                int end = json.LastIndexOf('}');
+                if (start == -1 || end == -1)
                 {
-                    string request = $"GET {CONFIG_PATH} HTTP/1.0\r\nHost: {ip}\r\nConnection: close\r\n\r\n";
-                    byte[] requestBytes = Encoding.ASCII.GetBytes(request);
-                    await stream.WriteAsync(requestBytes, 0, requestBytes.Length);
+                    return null;
+                }
 
-                    await Task.Delay(100);
-
-                    // Читаем с таймаутом 300 мс
-                    byte[] buffer = new byte[2048];
-                    int totalBytes = 0;
-
-                    using (var cts = new System.Threading.CancellationTokenSource(300))
-                    {
-                        while (!cts.Token.IsCancellationRequested)
-                        {
-                            if (!stream.DataAvailable && totalBytes > 0)
-                                break;
-
-                            if (!stream.DataAvailable)
-                            {
-                                await Task.Delay(20);
-                                continue;
-                            }
-
-                            int read = await stream.ReadAsync(buffer, totalBytes, buffer.Length - totalBytes);
-                            if (read == 0) break;
-                            totalBytes += read;
-
-                            if (totalBytes >= buffer.Length)
-                            {
-                                Array.Resize(ref buffer, buffer.Length * 2);
-                            }
-                        }
-                    }
-
-                    if (totalBytes == 0)
-                    {
-                        return null;
-                    }
-
-                    string response = Encoding.UTF8.GetString(buffer, 0, totalBytes);
-
-                    if (response.Contains("token") || response.Contains("200 OK"))
-                    {
-                        stopwatch.Stop();
-
-                        int start = response.IndexOf('{');
-                        int end = response.LastIndexOf('}');
-                        if (start != -1 && end != -1)
-                        {
-                            string json = response.Substring(start, end - start + 1);
-                            try
-                            {
-                                var tokenData = JsonConvert.DeserializeObject<TokenResponse>(json);
-                                if (tokenData != null && !string.IsNullOrEmpty(tokenData.Token))
-                                {
-                                    var config = await GetDeviceConfig(ip);
-                                    return DeviceFabrica.BuildDevice(config);
-                                }
-                            }
-                            catch
-                            {
-                                return DeviceFabrica.BuildDevice(null);
-                            }
-                        }
-                    }
+                json = json.Substring(start, end - start + 1);
+                var tokenData = JsonConvert.DeserializeObject<TokenResponse>(json);
+                if (tokenData != null && !string.IsNullOrEmpty(tokenData.Token))
+                {
+                    var config = await GetDeviceConfig(httpClient, ip);
+                    return DeviceFabrica.BuildDevice(config);
                 }
             }
             catch
             {
-                // Игнорируем ошибки
-            }
-            finally
-            {
-                if (client != null)
-                {
-                    try { client.Close(); } catch { }
-                    try { client.Dispose(); } catch { }
-                }
+                // Игнорируем ошибки (таймаут, отказ в соединении и т.д.)
             }
 
             return null;
         }
 
-        static async Task<DeviceConfig?> GetDeviceConfig(IPAddress ip)
+        static async Task<DeviceConfig?> GetDeviceConfig(HttpClient httpClient, IPAddress ip)
         {
-            TcpClient? client = null;
-
             try
             {
-                client = new TcpClient();
-
-                var connectTask = client.ConnectAsync(ip.ToString(), 80);
-                if (await Task.WhenAny(connectTask, Task.Delay(200)) != connectTask)
+                using var response = await httpClient.GetAsync($"http://{ip}/api/config");
+                if (!response.IsSuccessStatusCode)
                 {
                     return null;
                 }
 
-                await connectTask;
-                await Task.Delay(20);
-
-                using (var stream = client.GetStream())
+                string raw = await response.Content.ReadAsStringAsync();
+                int start = raw.IndexOf('{');
+                int end = raw.LastIndexOf('}');
+                if (start != -1 && end != -1)
                 {
-                    string request = $"GET /api/config HTTP/1.0\r\nHost: {ip}\r\nConnection: close\r\n\r\n";
-                    byte[] requestBytes = Encoding.ASCII.GetBytes(request);
-                    await stream.WriteAsync(requestBytes, 0, requestBytes.Length);
+                    string json = raw.Substring(start, end - start + 1);
+                    var config = JsonConvert.DeserializeObject<ConfigResponse>(json);
 
-                    await Task.Delay(50);
-
-                    byte[] buffer = new byte[2048];
-                    int totalBytes = 0;
-
-                    using (var cts = new System.Threading.CancellationTokenSource(300))
+                    return new DeviceConfig
                     {
-                        while (!cts.Token.IsCancellationRequested)
-                        {
-                            if (!stream.DataAvailable && totalBytes > 0)
-                                break;
-
-                            if (!stream.DataAvailable)
-                            {
-                                await Task.Delay(20);
-                                continue;
-                            }
-
-                            int read = await stream.ReadAsync(buffer, totalBytes, buffer.Length - totalBytes);
-                            if (read == 0) break;
-                            totalBytes += read;
-                        }
-                    }
-
-                    if (totalBytes == 0)
-                    {
-                        return null;
-                    }
-
-                    string response = Encoding.UTF8.GetString(buffer, 0, totalBytes);
-
-                    int start = response.IndexOf('{');
-                    int end = response.LastIndexOf('}');
-                    if (start != -1 && end != -1)
-                    {
-                        string json = response.Substring(start, end - start + 1);
-                        var config = JsonConvert.DeserializeObject<ConfigResponse>(json);
-
-                        return new DeviceConfig
-                        {
-                            Name = config?.Config?.DeviceName ?? "Unknown",
-                            Mac = config?.Config?.MacAddress ?? "Unknown",
-                            RSSI = config?.Network?.RSSI ?? 0,
-                            ChannelsCount = config?.Config?.ChannelsCount ?? 0,
-                            DeviceType = config?.Config?.DeviceType ?? "Unknown",
-                            FirmwareVersion = config?.Config?.FirmwareVersion ?? "Unknown",
-                            SampleFrequancy = config?.Config?.SampleFrequancy ?? 0,
-                            SensorType = config?.Config?.SensorType ?? "Unknown",
-                            IPAddress = ip
-                        };
-                    }
+                        Name = config?.Config?.DeviceName ?? "Unknown",
+                        Mac = config?.Config?.MacAddress ?? "Unknown",
+                        RSSI = config?.Network?.RSSI ?? 0,
+                        ChannelsCount = config?.Config?.ChannelsCount ?? 0,
+                        DeviceType = config?.Config?.DeviceType ?? "Unknown",
+                        FirmwareVersion = config?.Config?.FirmwareVersion ?? "Unknown",
+                        SampleFrequancy = config?.Config?.SampleFrequancy ?? 0,
+                        SensorType = config?.Config?.SensorType ?? "Unknown",
+                        IPAddress = ip
+                    };
                 }
             }
             catch
             {
                 // Игнорируем ошибки
-            }
-            finally
-            {
-                if (client != null)
-                {
-                    try { client.Close(); } catch { }
-                    try { client.Dispose(); } catch { }
-                }
             }
 
             return null;

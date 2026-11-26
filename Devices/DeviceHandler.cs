@@ -126,7 +126,7 @@ namespace SuperVisionObjectDesktop.Devices
                     {
                         Channels = (ushort)data.MatrixRows,
                         Count = (ushort)data.MatrixCols,
-                        Timestamp = timestamp,
+                        Timestamp = data.Timestamp > 0 ? data.Timestamp : timestamp,
                         Data = data.Matrix
                     });
                 }

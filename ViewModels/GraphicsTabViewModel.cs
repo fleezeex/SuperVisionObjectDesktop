@@ -34,7 +34,12 @@ namespace SuperVisionObjectDesktop.ViewModels
                     case "MAX30105":
                         UserControl tab = new MAX30105Tabs(device) { Dock = DockStyle.Fill };
                         _tabs.Add(tab);
-                        var tabPage = new TabPage() { Text = device.Name };
+                        var tabPage = new TabPage()
+                        {
+                            Text = device.Name,
+                            BackColor = Color.White,
+                            ForeColor = Color.FromArgb(28, 28, 30)
+                        };
                         tabPage.Controls.Add(tab);
                         _graphicsTabs.TabPages.Add(tabPage);
                         break;
